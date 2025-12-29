@@ -3,7 +3,7 @@
 // Note that this is v2.0 of lumberjack, and should be imported using gopkg.in
 // thusly:
 //
-//   import "gopkg.in/natefinch/lumberjack.v2"
+//	import "gopkg.in/natefinch/lumberjack.v2"
 //
 // The package name remains simply lumberjack, and the code resides at
 // https://github.com/natefinch/lumberjack under the v2.0 branch.
@@ -66,7 +66,7 @@ var _ io.WriteCloser = (*Logger)(nil)
 // `/var/log/foo/server.log`, a backup created at 6:30pm on Nov 11 2016 would
 // use the filename `/var/log/foo/server-2016-11-04T18-30-00.000.log`
 //
-// Cleaning Up Old Log Files
+// # Cleaning Up Old Log Files
 //
 // Whenever a new logfile gets created, old log files may be deleted.  The most
 // recent files according to the encoded timestamp will be retained, up to a
@@ -78,9 +78,11 @@ var _ io.WriteCloser = (*Logger)(nil)
 // If MaxBackups and MaxAge are both 0, no old log files will be deleted.
 type Logger struct {
 	// Filename is the file to write logs to.  Backup log files will be retained
-	// in the same directory.  It uses <processname>-lumberjack.log in
+	// in the same directory if BackupDir is empty.  It uses <processname>-lumberjack.log in
 	// os.TempDir() if empty.
 	Filename string `json:"filename" yaml:"filename"`
+
+	BackupDir string `json:"backupdir" yaml:"backupdir"`
 
 	// MaxSize is the maximum size in megabytes of the log file before it gets
 	// rotated. It defaults to 100 megabytes.
@@ -215,10 +217,13 @@ func (l *Logger) openNew() error {
 	mode := os.FileMode(0600)
 	info, err := osStat(name)
 	if err == nil {
+		if err = os.MkdirAll(l.backupDir(), 0755); err != nil {
+			return fmt.Errorf("can't make directories for backup logfile: %s", err)
+		}
 		// Copy the mode off the old logfile.
 		mode = info.Mode()
 		// move the existing file
-		newname := backupName(name, l.LocalTime)
+		newname := backupName(name, l.backupDir(), l.LocalTime)
 		if err := os.Rename(name, newname); err != nil {
 			return fmt.Errorf("can't rename log file: %s", err)
 		}
@@ -242,10 +247,12 @@ func (l *Logger) openNew() error {
 }
 
 // backupName creates a new filename from the given name, inserting a timestamp
-// between the filename and the extension, using the local time if requested
-// (otherwise UTC).
-func backupName(name string, local bool) string {
-	dir := filepath.Dir(name)
+// between the filename and the extension, using the provided directory and the
+// local time if requested (otherwise UTC).
+func backupName(name, dir string, local bool) string {
+	if dir == "" {
+		dir = filepath.Dir(name)
+	}
 	filename := filepath.Base(name)
 	ext := filepath.Ext(filename)
 	prefix := filename[:len(filename)-len(ext)]
@@ -357,13 +364,13 @@ func (l *Logger) millRunOnce() error {
 	}
 
 	for _, f := range remove {
-		errRemove := os.Remove(filepath.Join(l.dir(), f.Name()))
+		errRemove := os.Remove(filepath.Join(l.backupDir(), f.Name()))
 		if err == nil && errRemove != nil {
 			err = errRemove
 		}
 	}
 	for _, f := range compress {
-		fn := filepath.Join(l.dir(), f.Name())
+		fn := filepath.Join(l.backupDir(), f.Name())
 		errCompress := compressLogFile(fn, fn+compressSuffix)
 		if err == nil && errCompress != nil {
 			err = errCompress
@@ -395,12 +402,13 @@ func (l *Logger) mill() {
 	}
 }
 
-// oldLogFiles returns the list of backup log files stored in the same
-// directory as the current log file, sorted by ModTime
+// oldLogFiles returns the list of backup log files stored in the configured
+// backup directory (or the log directory when BackupDir is empty), sorted by
+// ModTime.
 func (l *Logger) oldLogFiles() ([]logInfo, error) {
-	files, err := ioutil.ReadDir(l.dir())
+	files, err := ioutil.ReadDir(l.backupDir())
 	if err != nil {
-		return nil, fmt.Errorf("can't read log file directory: %s", err)
+		return nil, fmt.Errorf("can't read backup directory: %s", err)
 	}
 	logFiles := []logInfo{}
 
@@ -452,6 +460,13 @@ func (l *Logger) max() int64 {
 // dir returns the directory for the current filename.
 func (l *Logger) dir() string {
 	return filepath.Dir(l.filename())
+}
+
+func (l *Logger) backupDir() string {
+	if l.BackupDir != "" {
+		return l.BackupDir
+	}
+	return l.dir()
 }
 
 // prefixAndExt returns the filename part and extension part from the Logger's

@@ -318,6 +318,63 @@ func TestMaxBackups(t *testing.T) {
 	exists(notlogfiledir, t)
 }
 
+func TestSeparateBackupDir(t *testing.T) {
+	currentTime = fakeTime
+	megabyte = 1
+	logDir := makeTempDir("TestSeparateBackupDirLog", t)
+	defer os.RemoveAll(logDir)
+	backupDir := makeTempDir("TestSeparateBackupDirBackup", t)
+	defer os.RemoveAll(backupDir)
+
+	filename := logFile(logDir)
+	l := &Logger{
+		BackupDir:  backupDir,
+		Filename:   filename,
+		MaxBackups: 1,
+		MaxSize:    10,
+	}
+	defer l.Close()
+
+	b := []byte("boo!")
+	n, err := l.Write(b)
+	isNil(err, t)
+	equals(len(b), n, t)
+
+	existsWithContent(filename, b, t)
+	fileCount(logDir, 1, t)
+	fileCount(backupDir, 0, t)
+
+	newFakeTime()
+	firstBackup := backupFile(backupDir)
+
+	b2 := []byte("foooooo!")
+	n, err = l.Write(b2)
+	isNil(err, t)
+	equals(len(b2), n, t)
+
+	existsWithContent(filename, b2, t)
+	existsWithContent(firstBackup, b, t)
+	fileCount(logDir, 1, t)
+	fileCount(backupDir, 1, t)
+
+	newFakeTime()
+	secondBackup := backupFile(backupDir)
+
+	b3 := []byte("baaaaaar!")
+	n, err = l.Write(b3)
+	isNil(err, t)
+	equals(len(b3), n, t)
+
+	// allow asynchronous cleanup to finish
+	<-time.After(time.Millisecond * 10)
+
+	existsWithContent(filename, b3, t)
+	existsWithContent(secondBackup, b2, t)
+	fileCount(logDir, 1, t)
+	fileCount(backupDir, 1, t)
+	notExist(firstBackup, t)
+}
+
 func TestCleanupExistingBackups(t *testing.T) {
 	// test that if we start with more backup files than we're supposed to have
 	// in total, that extra ones get cleaned up when we rotate.
