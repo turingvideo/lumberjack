@@ -32,6 +32,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -224,7 +225,7 @@ func (l *Logger) openNew() error {
 		mode = info.Mode()
 		// move the existing file
 		newname := backupName(name, l.backupDir(), l.LocalTime)
-		if err := os.Rename(name, newname); err != nil {
+		if err := moveFile(name, newname, mode); err != nil {
 			return fmt.Errorf("can't rename log file: %s", err)
 		}
 
@@ -263,6 +264,59 @@ func backupName(name, dir string, local bool) string {
 
 	timestamp := t.Format(backupTimeFormat)
 	return filepath.Join(dir, fmt.Sprintf("%s-%s%s", prefix, timestamp, ext))
+}
+
+// moveFile renames src to dst and falls back to a copy when crossing filesystems.
+func moveFile(src, dst string, mode os.FileMode) error {
+	var err error
+	if err = os.Rename(src, dst); err == nil {
+		return nil
+	}
+
+	if errors.Is(err, syscall.EXDEV) {
+		return moveCrossFS(src, dst, mode)
+	}
+	
+	return err
+}
+
+func moveCrossFS(src, dst string, mode os.FileMode) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open src: %w", err)
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return fmt.Errorf("open dst: %w", err)
+	}
+
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		dstFile.Close()
+		return fmt.Errorf("copy: %w", err)
+	}
+
+	if err := dstFile.Sync(); err != nil {
+		dstFile.Close()
+		return fmt.Errorf("fsync dst: %w", err)
+	}
+	if err := dstFile.Close(); err != nil {
+		return fmt.Errorf("close dst: %w", err)
+	}
+
+	// Synchronize directories to prevent file loss in case of power failure.
+	dir, err := os.Open(filepath.Dir(dst))
+	if err == nil {
+		dir.Sync()
+		dir.Close()
+	}
+
+	if err := os.Remove(src); err != nil {
+		return fmt.Errorf("remove src: %w", err)
+	}
+
+	return nil
 }
 
 // openExistingOrNew opens the logfile if it exists and if the current write
