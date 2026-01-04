@@ -214,7 +214,7 @@ func (l *Logger) openNew() error {
 	}
 
 	name := l.filename()
-	mode := os.FileMode(0600)
+	mode := os.FileMode(0644)
 	info, err := osStat(name)
 	if err == nil {
 		if err = os.MkdirAll(l.backupDir(), 0755); err != nil {
